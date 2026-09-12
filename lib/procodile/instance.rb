@@ -68,6 +68,27 @@ module Procodile
     end
 
     #
+    # Return the names of things that have changed since this instance was spawned
+    # but which a usr1/usr2 restart cannot apply.
+    #
+    # Those modes signal the existing process instead of replacing it, so anything
+    # only read at spawn time -- the environment and the command -- keeps whatever
+    # value it had when the process first started, even though Supervisor#restart
+    # has reloaded the configuration. Returns an empty array for an instance that
+    # was never spawned by this supervisor, since there is nothing to compare.
+    #
+    def unapplied_changes
+      changes = []
+      if @spawned_environment_variables && @spawned_environment_variables != environment_variables
+        changes << 'environment'
+      end
+      if @spawned_command && @spawned_command != @process.command
+        changes << 'command'
+      end
+      changes
+    end
+
+    #
     # Return the path to this instance's PID file
     #
     def pid_file_path
@@ -146,8 +167,10 @@ module Procodile
         end
         @tag = @supervisor.tag.dup if @supervisor.tag
         Dir.chdir(@process.config.root)
+        @spawned_environment_variables = environment_variables
+        @spawned_command = @process.command
         Rbenv.without do
-          @pid = ::Process.spawn(environment_variables, @process.command, :out => log_destination, :err => log_destination, :pgroup => true)
+          @pid = ::Process.spawn(@spawned_environment_variables, @spawned_command, :out => log_destination, :err => log_destination, :pgroup => true)
         end
         log_destination.close
         File.open(pid_file_path, 'w') { |f| f.write(@pid.to_s + "\n") }
@@ -159,6 +182,18 @@ module Procodile
         end
         @started_at = Time.now
       end
+    end
+
+    #
+    # Log a warning when a usr1/usr2 restart has left a configuration change
+    # unapplied. Only speaks up when something actually changed, so routine
+    # restarts stay quiet.
+    #
+    def log_unapplied_changes
+      changes = unapplied_changes
+      return if changes.empty?
+
+      Procodile.log(@process.log_color, description, "Warning: #{changes.join(' and ')} changed since this process started, but #{@process.restart_mode} signals the existing process rather than replacing it. Stop and start this process for the change to take effect.")
     end
 
     #
@@ -227,6 +262,7 @@ module Procodile
           ::Process.kill(@process.restart_mode.upcase, @pid)
           @tag = @supervisor.tag if @supervisor.tag
           Procodile.log(@process.log_color, description, "Sent #{@process.restart_mode.upcase} signal to process #{@pid}")
+          log_unapplied_changes
         else
           Procodile.log(@process.log_color, description, "Process not running already. Starting it.")
           on_stop
