@@ -4,3 +4,4 @@ test-app/pids
 test-app/procodile.log
 global.yml
 *.gem
+Gemfile.lock
