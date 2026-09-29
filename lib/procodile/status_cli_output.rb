@@ -36,6 +36,9 @@ module Procodile
         for message in @status['messages']
           puts "\e[31m * #{Message.parse(message)}\e[0m"
         end
+        if @status['messages'].any? { |message| message['type'] == 'incorrect_quantity' }
+          puts "\e[33m   Run `procodile check_concurrency` to start the missing process(es).\e[0m"
+        end
       end
     end
 
