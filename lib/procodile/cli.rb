@@ -143,6 +143,7 @@ module Procodile
         instances = ControlClient.run(@config.sock_path, 'start_processes', :processes => process_names_from_cli_option, :tag => @options[:tag], :port_allocations => @options[:port_allocations])
         if instances.empty?
           puts "No processes to start."
+          report_processes_below_quantity
         else
           instances.each do |instance|
             puts "Started".color(32) + " #{instance['description']} (PID: #{instance['pid']})"
@@ -473,6 +474,32 @@ module Procodile
       ::Process.getpgid(pid) ? true : false
     rescue Errno::ESRCH
       false
+    end
+
+    # `start` only starts process types with no running instances at all (see
+    # Supervisor#start_processes), so a type running below its configured quantity is
+    # skipped and the user is told "No processes to start." with no indication that
+    # anything is wrong. Name the command that actually tops it up.
+    def report_processes_below_quantity
+      status = ControlClient.run(@config.sock_path, 'status')
+      below = processes_below_quantity(status['messages'], process_names_from_cli_option)
+      return if below.empty?
+
+      verb = below.size == 1 ? 'is' : 'are'
+      puts "#{below.join(', ')} #{verb} running below the configured quantity."
+      puts "Run `procodile check_concurrency` to start the missing process(es)."
+    rescue Procodile::Error
+      # This is advisory output only -- never turn a successful no-op into a failure.
+      nil
+    end
+
+    # Names of process types that the supervisor reports as below their configured
+    # quantity, optionally narrowed to the types the user asked to start. Instance
+    # suffixes ("worker.1") are reduced to the type name.
+    def processes_below_quantity(messages, requested = nil)
+      below = messages.select { |m| m['type'] == 'incorrect_quantity' }.map { |m| m['process'] }
+      return below if requested.nil?
+      below & requested.map { |name| name.split('.', 2).first }
     end
 
     def process_names_from_cli_option
